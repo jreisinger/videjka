@@ -93,15 +93,15 @@ func joinWithSubdirs(dstDir, srcPath string, levels int) string {
 
 func main() {
 	defaultDir := filepath.Join(os.Getenv("HOME"), "OneDrive") + string(os.PathSeparator)
-	dir := flag.String("dir", defaultDir, "directory to search")
-	cpDir := flag.String("cp", "", "copy the found files into `directory`")
+	root := flag.String("path", defaultDir, "path to search")
+	cpDir := flag.String("cp", "", "copy the found files into `path`")
 	levels := flag.Int("L", 0, "retain `n` directory levels")
 	maxSize := flag.Int("s", 0, "file must be smaller than `bytes`")
 	flag.Parse()
 
 	var errors []string
 
-	err := filepath.WalkDir(*dir, func(path string, d fs.DirEntry, err error) error {
+	err := filepath.WalkDir(*root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "skip: %v\n", err)
 			return nil
@@ -123,7 +123,7 @@ func main() {
 			return nil
 		}
 
-		rel, err := filepath.Rel(*dir, path)
+		rel, err := filepath.Rel(*root, path)
 		if err != nil {
 			errors = append(errors, fmt.Sprintf("%s: %v", path, err))
 			return nil
