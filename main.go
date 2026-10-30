@@ -96,10 +96,10 @@ func main() {
 	dir := flag.String("dir", defaultDir, "directory to search")
 	cpDir := flag.String("cp", "", "copy the found files into `directory`")
 	levels := flag.Int("L", 0, "retain `n` directory levels")
+	maxSixe := flag.Int("s", 0, "file must be smaller than `bytes`")
 	flag.Parse()
 
 	var errors []string
-	var copied int
 
 	err := filepath.WalkDir(*dir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -107,7 +107,19 @@ func main() {
 			return nil
 		}
 
-		if d.IsDir() || !videoExt[strings.ToLower(filepath.Ext(d.Name()))] || !isHuman(d.Name()) {
+		if d.IsDir() {
+			return nil
+		}
+
+		if !videoExt[strings.ToLower(filepath.Ext(d.Name()))] || !isHuman(d.Name()) {
+			return nil
+		}
+
+		fi, err := d.Info()
+		if err != nil {
+			errors = append(errors, fmt.Sprintf("getting file info: %v", err))
+		}
+		if fi.Size() > int64(*maxSixe) {
 			return nil
 		}
 
@@ -127,8 +139,7 @@ func main() {
 		if err := copy(path, dest); err != nil {
 			errors = append(errors, fmt.Sprintf("%s: %v", path, err))
 		} else {
-			copied++
-			fmt.Printf("\r%d copied", copied)
+			fmt.Printf("%q -> %q\n", path, dest)
 		}
 
 		return nil
