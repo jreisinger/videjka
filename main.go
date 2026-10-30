@@ -1,4 +1,3 @@
-// videjka finds video files with human-created names inside a [OneDrive] folder.
 package main
 
 import (
@@ -100,6 +99,7 @@ func main() {
 	flag.Parse()
 
 	var errors []string
+	var copied int
 
 	err := filepath.WalkDir(*dir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -126,6 +126,9 @@ func main() {
 
 		if err := copy(path, dest); err != nil {
 			errors = append(errors, fmt.Sprintf("%s: %v", path, err))
+		} else {
+			copied++
+			fmt.Printf("\r%d copied", copied)
 		}
 
 		return nil
