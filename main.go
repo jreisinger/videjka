@@ -1,14 +1,20 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"io/fs"
+	"log"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
+	"syscall"
 )
 
 var videoExt = map[string]bool{
@@ -22,6 +28,11 @@ var videoExt = map[string]bool{
 	".webm": true,
 	".mpg":  true,
 	".mpeg": true,
+}
+
+func isVideo(filename string) bool {
+	ext := filepath.Ext(filename)
+	return videoExt[strings.ToLower(ext)]
 }
 
 var machinePatterns = []*regexp.Regexp{
@@ -55,10 +66,16 @@ func isHuman(filename string) bool {
 	return true
 }
 
+type video struct {
+	path string
+	dest string
+}
+
 // copy copies src file to dest file creating any necessary
 // parents for dest path.
 func copy(src, dest string) error {
-	if err := os.MkdirAll(filepath.Dir(dest), 0755); err != nil {
+	err := os.MkdirAll(filepath.Dir(dest), 0755)
+	if err != nil {
 		return err
 	}
 
@@ -78,16 +95,16 @@ func copy(src, dest string) error {
 	return err
 }
 
-// joinWithSubdirs joins dstDir with srcPath retaining levels of subdirectories
-// from srcPath.
-func joinWithSubdirs(dstDir, srcPath string, levels int) string {
+// joinWithDirs joins dstPath with srcPath retaining levels of directories from
+// srcPath.
+func joinWithDirs(dstPath, srcPath string, levels int) string {
 	if levels < 0 {
-		return filepath.Join(dstDir, srcPath)
+		return filepath.Join(dstPath, srcPath)
 	}
 
 	src := filepath.Dir(srcPath)
 	if src == "." {
-		return filepath.Join(dstDir, filepath.Base(srcPath))
+		return filepath.Join(dstPath, filepath.Base(srcPath))
 	}
 
 	parts := strings.Split(filepath.Clean(src), string(os.PathSeparator))
@@ -96,22 +113,66 @@ func joinWithSubdirs(dstDir, srcPath string, levels int) string {
 	}
 	keep := parts[len(parts)-levels:]
 
-	return filepath.Join(dstDir, filepath.Join(keep...), filepath.Base(srcPath))
+	return filepath.Join(dstPath, filepath.Join(keep...), filepath.Base(srcPath))
 }
 
 func main() {
+	log.SetFlags(0)
+	log.SetPrefix(filepath.Base(os.Args[0]) + ": ")
+
 	defaultDir := filepath.Join(os.Getenv("HOME"), "OneDrive") + string(os.PathSeparator)
 	root := flag.String("path", defaultDir, "path to search")
 	cpDir := flag.String("cp", "", "copy the found files into `path`")
-	levels := flag.Int("L", 0, "retain `n` directory levels")
-	maxSize := flag.Int("s", 0, "file must be smaller than `bytes`")
+	levels := flag.Int("L", 0, "retain `n` directory levels from source path")
 	flag.Parse()
 
-	var errors []string
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
-	err := filepath.WalkDir(*root, func(path string, d fs.DirEntry, err error) error {
+	go func() {
+		<-ctx.Done()
+		log.Printf("received signal, waiting for active copies to finish ...")
+		stop() // Restore default behavior so a second signal forces exit.
+	}()
+
+	videos := make(chan video)
+	wg := sync.WaitGroup{}
+
+	wg.Go(func() {
+		defer close(videos)
+		err := filepath.WalkDir(*root, getVideos(ctx, videos))
+		if err != nil && !errors.Is(err, context.Canceled) {
+			log.Fatal(err)
+		}
+	})
+
+	for range 5 {
+		wg.Go(func() {
+			for v := range videos {
+				dest := joinWithDirs(*cpDir, v.path, *levels)
+				if len(*cpDir) > 0 {
+					err := copy(v.path, dest)
+					if err != nil {
+						log.Print(err)
+						continue
+					}
+				}
+				fmt.Printf("%q -> %q\n", v.path, dest)
+			}
+		})
+	}
+
+	wg.Wait()
+}
+
+func getVideos(ctx context.Context, in chan<- video) fs.WalkDirFunc {
+	return func(path string, d fs.DirEntry, err error) error {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "skip: %v\n", err)
+			log.Print(err)
 			return nil
 		}
 
@@ -119,49 +180,19 @@ func main() {
 			return nil
 		}
 
-		if !videoExt[strings.ToLower(filepath.Ext(d.Name()))] || !isHuman(d.Name()) {
+		if !isVideo(d.Name()) {
 			return nil
 		}
 
-		fi, err := d.Info()
-		if err != nil {
-			errors = append(errors, fmt.Sprintf("getting file info: %v", err))
-		}
-		if *maxSize > 0 && fi.Size() > int64(*maxSize) {
+		if !isHuman(d.Name()) {
 			return nil
 		}
 
-		rel, err := filepath.Rel(*root, path)
-		if err != nil {
-			errors = append(errors, fmt.Sprintf("%s: %v", path, err))
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case in <- video{path: path}:
 			return nil
 		}
-
-		dest := joinWithSubdirs(*cpDir, rel, *levels)
-
-		if len(*cpDir) <= 0 {
-			fmt.Printf("%q (%d) -> %q\n", path, fi.Size(), dest)
-			return nil
-		}
-
-		if err := copy(path, dest); err != nil {
-			errors = append(errors, fmt.Sprintf("%s: %v", path, err))
-		} else {
-			fmt.Printf("%q (%d) -> %q\n", path, fi.Size(), dest)
-		}
-
-		return nil
-	})
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
-	}
-
-	if len(errors) > 0 {
-		fmt.Fprintln(os.Stderr, "errors:")
-		for _, e := range errors {
-			fmt.Fprintln(os.Stderr, " ", e)
-		}
-		os.Exit(1)
 	}
 }
