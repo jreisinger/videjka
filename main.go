@@ -96,7 +96,7 @@ func main() {
 	dir := flag.String("dir", defaultDir, "directory to search")
 	cpDir := flag.String("cp", "", "copy the found files into `directory`")
 	levels := flag.Int("L", 0, "retain `n` directory levels")
-	maxSixe := flag.Int("s", 0, "file must be smaller than `bytes`")
+	maxSize := flag.Int("s", 0, "file must be smaller than `bytes`")
 	flag.Parse()
 
 	var errors []string
@@ -119,7 +119,7 @@ func main() {
 		if err != nil {
 			errors = append(errors, fmt.Sprintf("getting file info: %v", err))
 		}
-		if fi.Size() > int64(*maxSixe) {
+		if *maxSize > 0 && fi.Size() > int64(*maxSize) {
 			return nil
 		}
 
@@ -132,14 +132,14 @@ func main() {
 		dest := joinWithSubdirs(*cpDir, rel, *levels)
 
 		if len(*cpDir) <= 0 {
-			fmt.Printf("%q -> %q\n", path, dest)
+			fmt.Printf("%q (%d) -> %q\n", path, fi.Size(), dest)
 			return nil
 		}
 
 		if err := copy(path, dest); err != nil {
 			errors = append(errors, fmt.Sprintf("%s: %v", path, err))
 		} else {
-			fmt.Printf("%q -> %q\n", path, dest)
+			fmt.Printf("%q (%d) -> %q\n", path, fi.Size(), dest)
 		}
 
 		return nil
