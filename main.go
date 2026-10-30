@@ -33,8 +33,16 @@ var machinePatterns = []*regexp.Regexp{
 	regexp.MustCompile(`_iOS$`),
 	// Long numbers
 	regexp.MustCompile(`\d{10,}`),
-	// Like P4300021 ...
+	// Like P4300021
 	regexp.MustCompile(`(?i)^P\d+`),
+	// Like 20231202_141942000_iOS
+	regexp.MustCompile(`_iOS$`),
+	// Like bfb1adf7-8be1-453f-9c03-326b46ff0e88
+	regexp.MustCompile(`(?i)[a-f0-9]{12,}`),
+	// Like MOV02832
+	regexp.MustCompile(`^MOV\d+$`),
+	// Like foto 136
+	regexp.MustCompile(`^foto\s*\d+$`),
 }
 
 func isHuman(filename string) bool {
