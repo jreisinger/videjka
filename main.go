@@ -71,9 +71,22 @@ type video struct {
 }
 
 // copy copies src file to dst file creating any necessary parents for dst path.
+// Copying is skipped if dst already exists and has the same size as src.
 func copy(src, dst string) error {
-	err := os.MkdirAll(filepath.Dir(dst), 0755)
+	if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
+		return err
+	}
+
+	srcInfo, err := os.Stat(src)
 	if err != nil {
+		return err
+	}
+
+	dstInfo, err := os.Stat(dst)
+	if err == nil && dstInfo.Size() == srcInfo.Size() {
+		return nil
+	}
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 
@@ -83,7 +96,7 @@ func copy(src, dst string) error {
 	}
 	defer in.Close()
 
-	out, err := os.Create(dst)
+	out, err := os.Create(dst) // creates or truncates
 	if err != nil {
 		return err
 	}
