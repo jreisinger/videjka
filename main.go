@@ -122,7 +122,7 @@ func joinWithDirs(dstPath, srcPath string, levels int) string {
 
 // getVideos is to be used by filepath.Walkdir. The returned function sends
 // paths of video files with human names down the channel.
-func getVideos(ctx context.Context, in chan<- string) fs.WalkDirFunc {
+func getVideos(ctx context.Context, ch chan<- string) fs.WalkDirFunc {
 	return func(path string, d fs.DirEntry, err error) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -139,7 +139,7 @@ func getVideos(ctx context.Context, in chan<- string) fs.WalkDirFunc {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case in <- path:
+		case ch <- path:
 			return nil
 		}
 	}
