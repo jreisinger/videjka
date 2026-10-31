@@ -14,7 +14,6 @@ import (
 	"regexp"
 	"strings"
 	"sync"
-	"syscall"
 )
 
 var videoExt = map[string]bool{
@@ -67,14 +66,13 @@ func isHuman(filename string) bool {
 }
 
 type video struct {
-	path string
-	dest string
+	src string
+	dst string
 }
 
-// copy copies src file to dest file creating any necessary
-// parents for dest path.
-func copy(src, dest string) error {
-	err := os.MkdirAll(filepath.Dir(dest), 0755)
+// copy copies src file to dst file creating any necessary parents for dst path.
+func copy(src, dst string) error {
+	err := os.MkdirAll(filepath.Dir(dst), 0755)
 	if err != nil {
 		return err
 	}
@@ -85,7 +83,7 @@ func copy(src, dest string) error {
 	}
 	defer in.Close()
 
-	out, err := os.Create(dest)
+	out, err := os.Create(dst)
 	if err != nil {
 		return err
 	}
@@ -98,46 +96,71 @@ func copy(src, dest string) error {
 // joinWithDirs joins dstPath with srcPath retaining levels of directories from
 // srcPath.
 func joinWithDirs(dstPath, srcPath string, levels int) string {
-	if levels < 0 {
-		return filepath.Join(dstPath, srcPath)
-	}
-
-	src := filepath.Dir(srcPath)
-	if src == "." {
+	if levels <= 0 {
 		return filepath.Join(dstPath, filepath.Base(srcPath))
 	}
 
-	parts := strings.Split(filepath.Clean(src), string(os.PathSeparator))
+	srcDir := filepath.Dir(srcPath)
+	srcBase := filepath.Base(srcPath)
+
+	parts := strings.Split(filepath.Clean(srcDir), string(os.PathSeparator))
 	if levels > len(parts) {
 		levels = len(parts)
 	}
 	keep := parts[len(parts)-levels:]
 
-	return filepath.Join(dstPath, filepath.Join(keep...), filepath.Base(srcPath))
+	return filepath.Join(dstPath, filepath.Join(keep...), srcBase)
+}
+
+// getVideos is to be used by filepath.Walkdir. The returned function sends
+// paths of video files with human names down the channel.
+func getVideos(ctx context.Context, in chan<- video) fs.WalkDirFunc {
+	return func(path string, d fs.DirEntry, err error) error {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+
+		if err != nil {
+			return err
+		}
+
+		if d.IsDir() || !isVideo(d.Name()) || !isHuman(d.Name()) {
+			return nil
+		}
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case in <- video{src: path}:
+			return nil
+		}
+	}
 }
 
 func main() {
 	log.SetFlags(0)
 	log.SetPrefix(filepath.Base(os.Args[0]) + ": ")
 
-	defaultDir := filepath.Join(os.Getenv("HOME"), "OneDrive") + string(os.PathSeparator)
-	root := flag.String("path", defaultDir, "path to search")
-	cpDir := flag.String("cp", "", "copy the found files into `path`")
 	levels := flag.Int("L", 0, "retain `n` directory levels from source path")
+	cpDir := flag.String("cp", "", "copy the found videos into `dest`")
+	defaultDir := filepath.Join(os.Getenv("HOME"), "OneDrive") + string(os.PathSeparator)
+	root := flag.String("p", defaultDir, "path to search for videos")
 	flag.Parse()
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	// Handle Ctrl-C gracefully.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
 	go func() {
 		<-ctx.Done()
-		log.Printf("received signal, waiting for active copies to finish ...")
+		log.Printf("shutting down ...")
 		stop() // Restore default behavior so a second signal forces exit.
 	}()
 
-	videos := make(chan video)
 	wg := sync.WaitGroup{}
+	videos := make(chan video)
 
+	// Search videos.
 	wg.Go(func() {
 		defer close(videos)
 		err := filepath.WalkDir(*root, getVideos(ctx, videos))
@@ -146,53 +169,24 @@ func main() {
 		}
 	})
 
+	// Copy or just print the found videos.
 	for range 5 {
 		wg.Go(func() {
 			for v := range videos {
-				dest := joinWithDirs(*cpDir, v.path, *levels)
 				if len(*cpDir) > 0 {
-					err := copy(v.path, dest)
+					dst := joinWithDirs(*cpDir, v.src, *levels)
+					err := copy(v.src, dst)
 					if err != nil {
 						log.Print(err)
 						continue
 					}
+					fmt.Printf("%q -> %q\n", v.src, dst)
+				} else {
+					fmt.Printf("%q\n", v.src)
 				}
-				fmt.Printf("%q -> %q\n", v.path, dest)
 			}
 		})
 	}
 
 	wg.Wait()
-}
-
-func getVideos(ctx context.Context, in chan<- video) fs.WalkDirFunc {
-	return func(path string, d fs.DirEntry, err error) error {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-
-		if err != nil {
-			log.Print(err)
-			return nil
-		}
-
-		if d.IsDir() {
-			return nil
-		}
-
-		if !isVideo(d.Name()) {
-			return nil
-		}
-
-		if !isHuman(d.Name()) {
-			return nil
-		}
-
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case in <- video{path: path}:
-			return nil
-		}
-	}
 }
