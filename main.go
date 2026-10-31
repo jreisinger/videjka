@@ -65,11 +65,6 @@ func isHuman(filename string) bool {
 	return true
 }
 
-type video struct {
-	src string
-	dst string
-}
-
 // copy copies src file to dst file creating any necessary parents for dst path.
 // Copying is skipped if dst already exists and has the same size as src.
 func copy(src, dst string) error {
@@ -127,7 +122,7 @@ func joinWithDirs(dstPath, srcPath string, levels int) string {
 
 // getVideos is to be used by filepath.Walkdir. The returned function sends
 // paths of video files with human names down the channel.
-func getVideos(ctx context.Context, in chan<- video) fs.WalkDirFunc {
+func getVideos(ctx context.Context, in chan<- string) fs.WalkDirFunc {
 	return func(path string, d fs.DirEntry, err error) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -144,7 +139,7 @@ func getVideos(ctx context.Context, in chan<- video) fs.WalkDirFunc {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case in <- video{src: path}:
+		case in <- path:
 			return nil
 		}
 	}
@@ -171,7 +166,7 @@ func main() {
 	}()
 
 	wg := sync.WaitGroup{}
-	videos := make(chan video)
+	videos := make(chan string)
 
 	// Search videos.
 	wg.Go(func() {
@@ -185,17 +180,17 @@ func main() {
 	// Copy or just print the found videos.
 	for range 5 {
 		wg.Go(func() {
-			for v := range videos {
+			for src := range videos {
 				if len(*cpDir) > 0 {
-					dst := joinWithDirs(*cpDir, v.src, *levels)
-					err := copy(v.src, dst)
+					dst := joinWithDirs(*cpDir, src, *levels)
+					err := copy(src, dst)
 					if err != nil {
 						log.Print(err)
 						continue
 					}
-					fmt.Printf("%q -> %q\n", v.src, dst)
+					fmt.Printf("%q -> %q\n", src, dst)
 				} else {
-					fmt.Printf("%q\n", v.src)
+					fmt.Printf("%q\n", src)
 				}
 			}
 		})
